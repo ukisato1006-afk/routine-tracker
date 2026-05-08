@@ -350,7 +350,10 @@ async function pullFromCloud(){
   if(!currentUser)return;
   setSync('syncing');
   try{
-    const {data,error}=await sb.from('tracker_data').select('data,updated_at').eq('user_id',currentUser.id).maybeSingle();
+    const {data,error}=await Promise.race([
+      sb.from('tracker_data').select('data,updated_at').eq('user_id',currentUser.id).maybeSingle(),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),10000))
+    ]);
     if(error)throw error;
     if(!data){
       // No remote data, push local up
@@ -380,11 +383,14 @@ async function pushToCloudNow(){
   setSync('syncing');
   try{
     const nowIso=new Date().toISOString();
-    const {error}=await sb.from('tracker_data').upsert({
-      user_id:currentUser.id,
-      data:S,
-      updated_at:nowIso
-    },{onConflict:'user_id'});
+    const {error}=await Promise.race([
+      sb.from('tracker_data').upsert({
+        user_id:currentUser.id,
+        data:S,
+        updated_at:nowIso
+      },{onConflict:'user_id'}),
+      new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),10000))
+    ]);
     if(error)throw error;
     try{localStorage.setItem(TS_KEY,Date.parse(nowIso).toString());}catch(e){}
     setSync('synced');
@@ -451,9 +457,13 @@ function translateErr(m){
   return m;
 }
 
-async function signOut(){
+function signOut(){
   if(!confirm('サインアウトしますか？'))return;
-  await sb.auth.signOut();
+  // Direct localStorage clear - most reliable, no Supabase calls
+  Object.keys(localStorage).filter(k=>k.includes('sb-')||k.includes('supabase')).forEach(k=>localStorage.removeItem(k));
+  // Fire-and-forget Supabase signout (don't wait for it)
+  try{sb.auth.signOut({scope:'local'}).catch(()=>{});}catch(e){}
+  location.reload();
 }
 
 function showAuth(){
